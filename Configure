@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+
+THIS_SCRIPT=$(basename ${BASH_SOURCE[0]})
+TOP=$(cd $(dirname ${BASH_SOURCE[0]}); pwd -P)
+
+PROJECT_CONFIG_FILE=$TOP/.project
+SUPPORT_TARGET_LIST="esp32"
+TOOLCHAIN_CHECKLIST="cc ld ar as"
+
+# default values
+DEFAULT_BUILD_DIR=$TOP/build
+DEFAULT_CROSSTOOL_VER=esp-2022r1
+
+print_usage()
+{
+cat << EOF
+Usage: ./$THIS_SCRIPT -t <TARGET> [OPTION]...
+
+Available options:
+  -h, --help                    display this help.
+
+  -t, --target <TARGET>         set <TARGET> as the target device.
+                                <TARGET> can be:
+                                  $SUPPORT_TARGET_LIST
+
+  -b, --build <DIR>             set <DIR> as the build directory.
+                                DEFAULT: $DEFAULT_BUILD_DIR
+
+  --cv <VERSION>                specify crosstool-ng version.
+                                DEFAULT: $DEFAULT_CROSSTOOL_VER
+
+  --toolchain <DIR>             use toolchain specified in <DIR>.
+EOF
+}
+
+parse_args()
+{
+    # global variables
+    _target=
+    _build_dir=$DEFAULT_BUILD_DIR
+    _crosstool_ver=$DEFAULT_CROSSTOOL_VER
+    _toolchain_dir=
+
+    while [ ${#} -gt 0 ]; do
+        case "${1}" in
+        -h | --help)
+            print_usage; return 1;;
+
+        -t | --target)
+            _target=$2; shift;;
+
+        -b | --build)
+            _build_dir=$2; shift;;
+
+        --cv)
+            _crosstool_ver=$2; shift;;
+
+        --toolchain)
+            _toolchain_dir=$2; shift;;
+
+        *)
+            pr_err "Unknown option: $1"
+            print_usage; return 1;;
+        esac
+        shift
+    done
+
+    check_opt_target || return 1
+
+    return 0
+}
+
+pr_err()
+{
+    echo "ERROR (Line# ${BASH_LINENO[0]}): $@"
+}
+
+check_opt_target()
+{
+    [ x$_target == x ] && {
+        pr_err "Missing mandatory option: --target"
+        return 1
+    } || {
+        for t in $SUPPORT_TARGET_LIST; do
+            [ x$t == x$_target ] && return 0
+        done
+
+        pr_err "Unknown target device: $_target"
+        return 1
+    }
+}
+
+get_host_info()
+{
+    _host_type=
+    _host_machine=
+
+    [ -x /usr/bin/uname ] || {
+        pr_err "Unable to get host system information."
+        return 1
+    }
+
+    local os=$(/usr/bin/uname -s)
+    case "$os" in
+    Linux)
+        _host_type=linux ;;
+    Darwin)
+        _host_type=macos ;;
+    *)
+        pr_err "Unsupport system: $os"
+        return 1
+    esac
+
+    local arch=$(/usr/bin/uname -m)
+    case "$arch" in
+    x86_64)
+        _host_machine=amd64 ;;
+    i386 | i686)
+        _host_machine=i686 ;;
+    arm64 | aarch64)
+        _host_machine=arm64 ;;
+    armv7l)
+        _host_machine=armhf ;;
+    *)
+        pr_err "Unsupport architecture: $arch"
+        return 1
+    esac
+
+    return 0
+}
+
+verify_toolchain()
+{
+    local print_error=$1
+
+    for t in $TOOLCHAIN_CHECKLIST; do
+        local tool=${_toolchain_dir}/${_toolchain_prefix}-${t}
+        [ -x $tool ] || {
+            [ x$print_error == x1 ] &&
+              pr_err "Missing tool: $tool"
+            return 1
+        }
+    done
+    return 0
+}
+
+download()
+{
+    local url=$1; shift
+    local dst=$1; shift
+
+    local wget_app=$(which wget)
+    [ -x "$wget_app" ] || {
+        pr_err "Download tool 'wget' is not available."
+        return 1
+    }
+
+    [ x$dst == x ] && {
+        $wget_app -q --show-progress $url
+    } || {
+        $wget_app -q --show-progress -O $dst $url
+    }
+}
+
+install_toolchain()
+{
+    _toolchain_dir=${TOP}/utils/toolchain/${_toolchain_prefix}
+
+    [ -d $_toolchain_dir ] && {
+        verify_toolchain && return 0
+    }
+
+    local tmpdir=$(mktemp -d)
+    local crosstool_base="https://github.com/espressif/crosstool-NG/releases/download"
+    local version_base="${crosstool_base}/${_crosstool_ver}"
+
+    local checksum_filename="crosstool-NG-${_crosstool_ver}-checksum.sha256"
+    local checksum_file="${tmpdir}/${checksum_filename}"
+    local checksum_url="${version_base}/${checksum_filename}"
+
+    [ x$_host_type == xmacos ] && [ x$_host_machine == xx86_64 ] && {
+        local tc_pattern="*${_toolchain_prefix}-.*-macos.tar.xz"
+    } || {
+        local tc_pattern="*${_toolchain_prefix}-.*-${_host_type}-${_host_machine}.tar.xz"
+    }
+
+    # download checksum file
+    download $checksum_url $checksum_file || {
+        pr_err "Failed to download checksum file."
+        rm -r $tmpdir
+        return 1
+    }
+
+    echo $tc_pattern
+    local match=$(grep "$tc_pattern" $checksum_file)
+    local pkg_checksum=${match% *}
+    local pkg_filename=${match#* \*}
+    local pkg_file="${tmpdir}/${pkg_filename}"
+    local pkg_url="${version_base}/${pkg_filename}"
+
+    # download toolchain package
+    download $pkg_url $pkg_file || {
+        pr_err "Failed to download toolchain package."
+        rm -r $tmpdir
+        return 1
+    }
+
+    local checksum=$(sha256sum $pkg_file | cut -d' ' -f1)
+    [ x$pkg_checksum == x$checksum ] || {
+        pr_err "Downloaded package is corrupted."
+        rm -r $tmpdir
+        return 1
+    }
+
+    tar -C $tmpdir -xf $pkg_file || {
+        pr_err "Failed to extract toolchain package."
+        rm -r $tmpdir
+        return 1
+    }
+
+    mkdir -p $_toolchain_dir
+    cp -a ${tmpdir}/${_toolchain_prefix}/bin/* ${_toolchain_dir}/
+
+    rm -r $tmpdir
+
+    return 0
+}
+
+check_toolchain()
+{
+    _toolchain_prefix=
+
+    case "$_target" in
+    esp32)
+        _toolchain_prefix=xtensa-esp32-elf ;;
+    *)
+        pr_err "Unknown target: $_target"
+        return 1;;
+    esac
+
+    [ x$_toolchain_dir == x ] && {
+        install_toolchain || return 1
+    }
+
+    verify_toolchain 1 || return 1
+    return 0
+}
+
+check_build_env()
+{
+    get_host_info || return 1
+    check_toolchain || return 1
+    return 0
+}
+
+init_config_file()
+{
+    _config_file=$1
+    echo -n "" > $_config_file
+}
+
+write_config_kv()
+{
+    local key=$1; shift
+    local value=$1; shift
+
+    echo "CONFIG_${key^^}=${value}" >> $_config_file
+}
+
+config_project()
+{
+    init_config_file $PROJECT_CONFIG_FILE
+
+    local klist="target host_type host_machine build_dir toolchain_dir "
+    klist+="toolchain_prefix crosstool_ver "
+
+    for k in $klist; do
+        local v=_$k
+        write_config_kv $k ${!v}
+    done
+
+    return 0
+}
+
+main()
+{
+    parse_args $@ || return 1
+    check_build_env || return 1
+    config_project || return 1
+}
+
+main $@
