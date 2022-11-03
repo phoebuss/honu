@@ -4,7 +4,7 @@ THIS_SCRIPT=$(basename ${BASH_SOURCE[0]})
 TOP=$(cd $(dirname ${BASH_SOURCE[0]}); pwd -P)
 
 PROJECT_CONFIG_FILE=$TOP/.project
-SUPPORT_TARGET_LIST="esp32"
+SUPPORT_PLATFORM_LIST="esp32"
 TOOLCHAIN_CHECKLIST="cc ld ar as"
 
 # default values
@@ -14,14 +14,14 @@ DEFAULT_CROSSTOOL_VER=esp-2022r1
 print_usage()
 {
 cat << EOF
-Usage: ./$THIS_SCRIPT -t <TARGET> [OPTION]...
+Usage: ./$THIS_SCRIPT -p <PLATFORM> [OPTION]...
 
 Available options:
   -h, --help                    display this help.
 
-  -t, --target <TARGET>         set <TARGET> as the target device.
-                                <TARGET> can be:
-                                  $SUPPORT_TARGET_LIST
+  -p, --platform <PLATFORM>     set <PLATFORM> as the target platform.
+                                <PLATFORM> can be:
+                                  $SUPPORT_PLATFORM_LIST
 
   -b, --build <DIR>             set <DIR> as the build directory.
                                 DEFAULT: $DEFAULT_BUILD_DIR
@@ -36,7 +36,7 @@ EOF
 parse_args()
 {
     # global variables
-    _target=
+    _platform=
     _build_dir=$DEFAULT_BUILD_DIR
     _crosstool_ver=$DEFAULT_CROSSTOOL_VER
     _toolchain_dir=
@@ -46,8 +46,8 @@ parse_args()
         -h | --help)
             print_usage; return 1;;
 
-        -t | --target)
-            _target=$2; shift;;
+        -p | --platform)
+            _platform=$2; shift;;
 
         -b | --build)
             _build_dir=$2; shift;;
@@ -65,7 +65,7 @@ parse_args()
         shift
     done
 
-    check_opt_target || return 1
+    check_opt_platform || return 1
 
     return 0
 }
@@ -75,17 +75,17 @@ pr_err()
     echo "ERROR (Line# ${BASH_LINENO[0]}): $@"
 }
 
-check_opt_target()
+check_opt_platform()
 {
-    [ x$_target == x ] && {
-        pr_err "Missing mandatory option: --target"
+    [ x$_platform == x ] && {
+        pr_err "Missing mandatory option: --platform"
         return 1
     } || {
-        for t in $SUPPORT_TARGET_LIST; do
-            [ x$t == x$_target ] && return 0
+        for t in $SUPPORT_PLATFORM_LIST; do
+            [ x$t == x$_platform ] && return 0
         done
 
-        pr_err "Unknown target device: $_target"
+        pr_err "Unknown target platform: $_platform"
         return 1
     }
 }
@@ -134,7 +134,7 @@ verify_toolchain()
     local print_error=$1
 
     for t in $TOOLCHAIN_CHECKLIST; do
-        local tool=${_toolchain_dir}/${_toolchain_prefix}-${t}
+        local tool=${_toolchain_dir}/bin/${_toolchain_prefix}-${t}
         [ -x $tool ] || {
             [ x$print_error == x1 ] &&
               pr_err "Missing tool: $tool"
@@ -191,7 +191,6 @@ install_toolchain()
         return 1
     }
 
-    echo $tc_pattern
     local match=$(grep "$tc_pattern" $checksum_file)
     local pkg_checksum=${match% *}
     local pkg_filename=${match#* \*}
@@ -212,14 +211,12 @@ install_toolchain()
         return 1
     }
 
-    tar -C $tmpdir -xf $pkg_file || {
+    mkdir -p $_toolchain_dir
+    tar -C $_toolchain_dir/.. -xf $pkg_file || {
         pr_err "Failed to extract toolchain package."
         rm -r $tmpdir
         return 1
     }
-
-    mkdir -p $_toolchain_dir
-    cp -a ${tmpdir}/${_toolchain_prefix}/bin/* ${_toolchain_dir}/
 
     rm -r $tmpdir
 
@@ -230,11 +227,11 @@ check_toolchain()
 {
     _toolchain_prefix=
 
-    case "$_target" in
+    case "$_platform" in
     esp32)
         _toolchain_prefix=xtensa-esp32-elf ;;
     *)
-        pr_err "Unknown target: $_target"
+        pr_err "Unknown platform: $_platform"
         return 1;;
     esac
 
@@ -271,7 +268,7 @@ config_project()
 {
     init_config_file $PROJECT_CONFIG_FILE
 
-    local klist="target host_type host_machine build_dir toolchain_dir "
+    local klist="platform host_type host_machine build_dir toolchain_dir "
     klist+="toolchain_prefix crosstool_ver "
 
     for k in $klist; do
@@ -282,11 +279,22 @@ config_project()
     return 0
 }
 
+confirm_config()
+{
+    echo "===================================================="
+    echo "Project is configured with the following settings:"
+    echo
+    cat $_config_file
+    echo
+    echo "===================================================="
+}
+
 main()
 {
     parse_args $@ || return 1
     check_build_env || return 1
     config_project || return 1
+    confirm_config
 }
 
 main $@
