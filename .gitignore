@@ -5,3 +5,8 @@
 !*.hpp
 !*.cpp
 !*.py
+!*.mk
+!Makefile
+!*.ld
+build/
+utils/toolchain/
