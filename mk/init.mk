@@ -11,6 +11,12 @@ AR := $(CROSS_COMPILE)-ar
 
 MKDIR := @@mkdir -pv
 
+HCC := $(shell which cc)
+
+ifeq ($(HCC),)
+$(error missing cc for host)
+endif
+
 DEFAULT_CFLAGS := -O0 -g3 -Wall
 DEFAULT_LDFLAGS := -nostartfiles -nostdlib
 

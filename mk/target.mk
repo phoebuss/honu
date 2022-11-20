@@ -1,4 +1,9 @@
+ifneq ($(TYPE),host)
 ODIR = $(BUILD_DIR)/$(subst $(TOP)/,,$(D))
+else
+ODIR = $(BUILD_DIR)/host/$(subst $(TOP)/,,$(D))
+endif
+
 $(ODIR):
 	mkdir -p $@
 
@@ -16,4 +21,6 @@ else ifeq ($(TYPE),lib)
 include $(TOP)/mk/lib.mk
 else ifeq ($(TYPE),copy)
 include $(TOP)/mk/copy.mk
+else ifeq ($(TYPE),host)
+include $(TOP)/mk/host.mk
 endif
