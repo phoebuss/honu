@@ -46,4 +46,4 @@ define _register_target
 include $(TOP)/mk/target.mk
 endef
 
-all_subdirs = $(notdir $(patsubst %/,%,$(wildcard $(D)/*/)))
+all_subdirs = $(notdir $(patsubst %/,%,$(dir $(wildcard $(D)/*/.))))
